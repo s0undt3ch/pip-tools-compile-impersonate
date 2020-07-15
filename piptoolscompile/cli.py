@@ -8,7 +8,7 @@
 '''
 
 # Import Python Libs
-from __future__ import absolute_import, print_function
+import io
 import os
 import re
 import sys
@@ -17,9 +17,7 @@ import argparse
 import platform
 import tempfile
 import textwrap
-import functools
 import traceback
-from collections import namedtuple
 try:
     from unittest import mock
 except ImportError:
@@ -27,10 +25,7 @@ except ImportError:
 
 CAPTURE_OUTPUT = os.environ.get('CAPTURE_OUTPUT', '1') == '1'
 
-# Import 3rd-party Libs
-import six
-
-LOG_STREAM = six.StringIO()
+LOG_STREAM = io.StringIO()
 logging.basicConfig(
     level=logging.DEBUG,
     stream=LOG_STREAM,
@@ -46,49 +41,7 @@ from piptools.cache import DependencyCache
 import pip._internal.utils.misc
 real_version_info = sys.version_info
 
-# Let's import get_supported because we need the returned value from the un-mocked function
-from pip._internal.pep425tags import get_supported
-
-
 log = logging.getLogger(os.path.basename(__file__))
-
-version_info = namedtuple('version_info', ['major', 'minor', 'micro', 'releaselevel', 'serial'])
-
-
-class ImpersonateSystem(object):
-
-    __slots__ = ('_python_version_info', '_platform')
-
-    def __init__(self, python_version_info, platform):
-        parts = [int(part) for part in python_version_info.split('.') if part.isdigit()]
-        python_version_info = list(sys.version_info)
-        for idx, part in enumerate(parts):
-            python_version_info[idx] = part
-        python_version_info = version_info(*python_version_info)
-        self._python_version_info = python_version_info
-        self._platform = platform
-
-    def get_mocks(self):
-        yield mock.patch('pip._internal.utils.misc.sys.version_info',
-                         new_callable=mock.PropertyMock(return_value=real_version_info))
-        yield mock.patch('piptools.resolver.DependencyCache',
-                         wraps=functools.partial(tweak_piptools_depcache_filename,
-                                                 self._python_version_info,
-                                                 self._platform))
-        yield mock.patch('pip._internal.pep425tags.get_impl_version_info',
-                         return_value=self._python_version_info[:2])
-        yield mock.patch('pip._internal.utils.packaging.sys.version_info',
-                         new_callable=mock.PropertyMock(return_value=self._python_version_info))
-        yield mock.patch('pip._vendor.packaging.markers.platform.python_version',
-                         return_value='{}.{}.{}'.format(*self._python_version_info))
-
-    def __enter__(self):
-        for mock_obj in self.get_mocks():
-            mock_obj.start()
-        return self
-
-    def __exit__(self, *args):
-        mock.patch.stopall()
 
 
 def tweak_piptools_depcache_filename(version_info, platform, *args, **kwargs):
@@ -100,87 +53,11 @@ def tweak_piptools_depcache_filename(version_info, platform, *args, **kwargs):
     return depcache
 
 
-def get_supported_with_fixed_unicode_width(*args, **kwargs):
-    supported = get_supported(*args, **kwargs)
-    for version, abi, arch in supported[:]:
-        if abi.endswith('u'):
-            supported.append((version, abi[:-1], arch))
-    return supported
-
-
-class ImpersonateWindows(ImpersonateSystem):
-
-    def get_mocks(self):
-        for entry in super(ImpersonateWindows, self).get_mocks():
-            yield entry
-        # We don't want pip trying query python's internals, it knows how to mock that internal information
-        yield mock.patch('pip._internal.pep425tags.get_config_var', return_value=None)
-        # Impersonate Windows 32
-        yield mock.patch('pip._internal.pep425tags.get_platform', return_value='win32')
-        # Wrap get_supported in out own function call to fix unicode width issues
-        yield mock.patch('pip._internal.pep425tags.get_supported', wraps=get_supported_with_fixed_unicode_width)
-        yield mock.patch('pip._internal.index.get_supported', wraps=get_supported_with_fixed_unicode_width)
-        # Patch pip's vendored packaging markers
-        yield mock.patch('pip._vendor.packaging.markers.os.name', new_callable=mock.PropertyMock(return_value='nt'))
-        yield mock.patch('pip._vendor.packaging.markers.sys.platform', new_callable=mock.PropertyMock(return_value='win32'))
-        yield mock.patch('pip._vendor.packaging.markers.platform.machine', return_value='AMD64')
-        yield mock.patch('pip._vendor.packaging.markers.platform.release', return_value='8.1')
-        yield mock.patch('pip._vendor.packaging.markers.platform.system', return_value='Windows')
-        yield mock.patch('pip._vendor.packaging.markers.platform.version', return_value='6.3.9600')
-
-
-class ImpersonateDarwin(ImpersonateSystem):
-
-    def get_mocks(self):
-        for entry in super(ImpersonateDarwin, self).get_mocks():
-            yield entry
-        # We don't want pip trying query python's internals, it knows how to mock that internal information
-        yield mock.patch('pip._internal.pep425tags.get_config_var', return_value=None)
-        # Impersonate Windows 32
-        yield mock.patch('pip._internal.pep425tags.get_platform', return_value='macosx_10_15_x86_64')
-        # Wrap get_supported in out own function call to fix unicode width issues
-        yield mock.patch('pip._internal.pep425tags.get_supported', wraps=get_supported_with_fixed_unicode_width)
-        yield mock.patch('pip._internal.index.get_supported', wraps=get_supported_with_fixed_unicode_width)
-        # Patch pip's vendored packaging markers
-        yield mock.patch('pip._vendor.packaging.markers.os.name', new_callable=mock.PropertyMock(return_value='posix'))
-        yield mock.patch('pip._vendor.packaging.markers.sys.platform', new_callable=mock.PropertyMock(return_value='darwin'))
-        yield mock.patch('pip._vendor.packaging.markers.platform.machine', return_value='x86_64')
-        yield mock.patch('pip._vendor.packaging.markers.platform.release', return_value='19.2.0')
-        yield mock.patch('pip._vendor.packaging.markers.platform.system', return_value='Darwin')
-        yield mock.patch('pip._vendor.packaging.markers.platform.version',
-                         return_value='Darwin Kernel Version 19.2.0: Sat Nov  9 03:47:04 PST 2019; root:xnu-6153.61.1~20/RELEASE_X86_64')
-        yield mock.patch('pip._vendor.packaging.markers.platform.python_version', return_value='{}.{}.{}'.format(*self._python_version_info))
-
-
-class ImpersonateLinux(ImpersonateSystem):
-
-    def get_mocks(self):
-        for entry in super(ImpersonateLinux, self).get_mocks():
-            yield entry
-        # We don't want pip trying query python's internals, it knows how to mock that internal information
-        yield mock.patch('pip._internal.pep425tags.get_config_var', return_value=None)
-        # Impersonate Windows 32
-        yield mock.patch('pip._internal.pep425tags.get_platform', return_value='linux2')
-        # Wrap get_supported in out own function call to fix unicode width issues
-        yield mock.patch('pip._internal.pep425tags.get_supported', wraps=get_supported_with_fixed_unicode_width)
-        yield mock.patch('pip._internal.index.get_supported', wraps=get_supported_with_fixed_unicode_width)
-        # Patch pip's vendored packaging markers
-        yield mock.patch('pip._vendor.packaging.markers.sys.platform',
-                         new_callable=mock.PropertyMock(return_value='linux{}'.format('2' if self._python_version_info[0] == 2 else '')))
-        yield mock.patch('pip._vendor.packaging.markers.os.name', new_callable=mock.PropertyMock(return_value='posix'))
-        yield mock.patch('pip._vendor.packaging.markers.platform.machine', return_value='x86_64')
-        yield mock.patch('pip._vendor.packaging.markers.platform.release', return_value='4.19.29-1-lts')
-        yield mock.patch('pip._vendor.packaging.markers.platform.system', return_value='Linux')
-        yield mock.patch('pip._vendor.packaging.markers.platform.version', return_value='#1 SMP Thu Mar 14 15:39:08 CET 2019')
-        yield mock.patch('pip._vendor.packaging.markers.platform.python_version', return_value='{}.{}.{}'.format(*self._python_version_info))
-
-
-
 class CatureSTDs(object):
 
     def __init__(self):
-        self._stdout = six.StringIO()
-        self._stderr = six.StringIO()
+        self._stdout = io.StringIO()
+        self._stderr = io.StringIO()
         self._sys_stdout = sys.stdout
         self._sys_stderr = sys.stderr
 
@@ -383,11 +260,8 @@ def main():
     if not options.files:
         parser.exit(2, 'Please pass at least one requirement file')
 
-    impersonations = {
-        'darwin': ImpersonateDarwin,
-        'windows': ImpersonateWindows,
-        'linux': ImpersonateLinux
-    }
+    import piptoolscompile.hacks
+    impersonations = piptoolscompile.hacks.IMPERSONATIONS
 
     regexes = []
     for regex in options.remove_line:

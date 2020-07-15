@@ -18,7 +18,7 @@ if __name__ == '__main__':
 # Import 3rd-party libs
 import nox
 
-PYTHON_VERSIONS = ('2.7', '3.4', '3.5', '3.6', '3.7', '3.8')
+PYTHON_VERSIONS = ('3.5', '3.6', '3.7', '3.8', '3.9')
 
 # Nox options
 #  Reuse existing virtualenvs
@@ -26,14 +26,9 @@ nox.options.reuse_existing_virtualenvs = True
 #  Don't fail on missing interpreters
 nox.options.error_on_missing_interpreters = False
 
-IS_WINDOWS = sys.platform.lower().startswith('win')
-
 @nox.session(python=PYTHON_VERSIONS)
 def tests(session):
-    if IS_WINDOWS:
-        session.run('python', '-m', 'pip', 'install', '-e', '.')
-    else:
-        session.install('-e', '.')
+    session.run('python', '-m', 'pip', 'install', '.')
     session.install('pytest')
     session.run('pytest', '-ra', '-s', '-vv', 'tests', *session.posargs)
 

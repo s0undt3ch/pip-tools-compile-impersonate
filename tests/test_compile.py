@@ -20,7 +20,13 @@ TARGET_PLATFORMS = ('linux', 'windows', 'darwin')
 REPO_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 INPUT_REQUIREMENTS_DIR = os.path.relpath(os.path.join(os.path.dirname(__file__), 'files'), REPO_ROOT)
 EXPECTED_REQUIREMENTS_DIR = os.path.relpath(os.path.join(os.path.dirname(__file__), 'files', 'expected'), REPO_ROOT)
-TARGET_PYTHON_VERSIONS = ('2.7', '3.4', '3.5', '3.6')
+TARGET_PYTHON_VERSIONS = (
+    '3.5',
+    '3.6',
+    '3.7',
+    '3.8',
+    '3.9'
+)
 
 @pytest.mark.parametrize('python_version', TARGET_PYTHON_VERSIONS)
 def test_py_version_nested_requirements(run_command, python_version):
@@ -55,13 +61,11 @@ MARKERS_INPUT_REQUIREMENT_TPL = textwrap.dedent('''\
     boto3==1.9.121; {marker} == {values[0]}
     boto3==1.9.122; {marker} == {values[1]}
     boto3==1.9.123; {marker} == {values[2]}
-    '''
-)
+    ''')
 MARKERS = {
     'os.name': ['nt', '"posix" and platform_system != "Linux"', '"posix" and platform_system != "Darwin"'],
     'sys.platform': ['win32', 'darwin', 'linux{}'.format('2' if sys.version_info.major == 2 else '')],
-    'platform_system': ['Windows', 'Darwin', 'Linux']
-}
+    'platform_system': ['Windows', 'Darwin', 'Linux']}
 
 @pytest.mark.parametrize(
     'platform,marker,expected',
@@ -116,12 +120,14 @@ def test_pywin32(run_command, platform):
     '''
     pywin32 has been an issue when mocking the requirements file compilation. test it.
     '''
+    if sys.version_info >= (3, 8):
+        pytest.skip("Can't install pywin32 on windows yet?!")
     input_requirement_name = 'pywin32-req'
     input_requirement = os.path.join(INPUT_REQUIREMENTS_DIR, '{}.in'.format(input_requirement_name))
     with open(input_requirement, 'w') as wfh:
         wfh.write(textwrap.dedent('''\
             pep8
-            pywin32==223; sys.platform == 'win32'
+            pywin32==228; sys.platform == 'win32'
             '''
             )
         )
@@ -186,13 +192,19 @@ def test_pyobjc(run_command, platform):
     '''
     pyobjc has been an issue when mocking the requirements file compilation. test it.
     '''
+    if not sys.platform.startswith('darwin') and platform == 'darwin' and (sys.version_info >= (3, 8) or sys.version_info < (3, 6)):
+        pytest.skip("We have problems compiling pyobjc on {}.{}".format(*sys.version_info))
     input_requirement_name = 'pyobjc-req'
     input_requirement = os.path.join(INPUT_REQUIREMENTS_DIR, '{}.in'.format(input_requirement_name))
+    if sys.version_info >= (3, 8):
+        pyobjc_version = "5.2"
+    else:
+        pyobjc_version = "5.1"
     with open(input_requirement, 'w') as wfh:
         wfh.write(textwrap.dedent('''\
             pep8
-            pyobjc==5.1.2; sys.platform == 'darwin'
-            '''
+            pyobjc=={}; sys.platform == 'darwin'
+            '''.format(pyobjc_version)
             )
         )
     compiled_requirements = os.path.join(
